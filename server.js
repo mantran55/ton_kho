@@ -170,16 +170,19 @@ app.get('/api/report', (req, res) => {
         const yesterday = new Date(y, m - 1, d - 1);
         const yDate = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
         const sql = `
-            SELECT s.ncc, s.ten_hang as tenHang, s.dvt,
-                COALESCE(t1.so_luong,0) as tonTruoc,
-                COALESCE(t2.so_luong,0) as tonSau,
-                COALESCE(n.so_luong,0) as nhap,
-                (COALESCE(t1.so_luong,0)-COALESCE(t2.so_luong,0)+COALESCE(n.so_luong,0)) as suDung,
-                (COALESCE(t1.so_luong,0)-COALESCE(t2.so_luong,0)+COALESCE(n.so_luong,0))*s.gia as thanhTien
+            SELECT 
+              s.ncc,
+              s.ten_hang AS "tenHang",
+              s.dvt,
+              COALESCE(t1.so_luong, 0) AS "tonTruoc",
+              COALESCE(t2.so_luong, 0) AS "tonSau",
+              COALESCE(n.so_luong, 0)  AS "nhap",
+              (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.so_luong,0))         AS "suDung",
+              (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.so_luong,0)) * s.gia  AS "thanhTien"
             FROM SanPham s
-            LEFT JOIN TonKho t1 ON s.id=t1.id_san_pham AND t1.ngay=?
-            LEFT JOIN TonKho t2 ON s.id=t2.id_san_pham AND t2.ngay=?
-            LEFT JOIN NhapHang n ON s.id=n.id_san_pham AND n.ngay=?
+            LEFT JOIN TonKho   t1 ON s.id = t1.id_san_pham AND t1.ngay = ?
+            LEFT JOIN TonKho   t2 ON s.id = t2.id_san_pham AND t2.ngay = ?
+            LEFT JOIN NhapHang n  ON s.id = n.id_san_pham  AND n.ngay  = ?
             ORDER BY s.stt
         `;
         db.query(sql, [yDate, reportDate, reportDate], (err, results) => {
@@ -192,20 +195,24 @@ app.get('/api/report', (req, res) => {
         const last = new Date(year, month, 0);
         const lastDay = `${last.getFullYear()}-${String(last.getMonth()+1).padStart(2,'0')}-${String(last.getDate()).padStart(2,'0')}`;
         const sql = `
-            SELECT s.ncc, s.ten_hang as tenHang, s.dvt,
-                COALESCE(t1.so_luong,0) as tonDauThang,
-                COALESCE(t2.so_luong,0) as tonCuoiThang,
-                COALESCE(n.total,0) as nhapTrongThang,
-                (COALESCE(t1.so_luong,0)-COALESCE(t2.so_luong,0)+COALESCE(n.total,0)) as suDungTrongThang,
-                (COALESCE(t1.so_luong,0)-COALESCE(t2.so_luong,0)+COALESCE(n.total,0))*s.gia as thanhTien
+            SELECT 
+              s.ncc,
+              s.ten_hang AS "tenHang",
+              s.dvt,
+              COALESCE(t1.so_luong, 0) AS "tonDauThang",
+              COALESCE(t2.so_luong, 0) AS "tonCuoiThang",
+              COALESCE(n.total, 0)     AS "nhapTrongThang",
+              (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.total,0))         AS "suDungTrongThang",
+              (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.total,0)) * s.gia AS "thanhTien"
             FROM SanPham s
-            LEFT JOIN TonKho t1 ON s.id=t1.id_san_pham AND t1.ngay=?
-            LEFT JOIN TonKho t2 ON s.id=t2.id_san_pham AND t2.ngay=?
+            LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = ?
+            LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = ?
             LEFT JOIN (
-                SELECT id_san_pham,SUM(so_luong) as total
-                FROM NhapHang WHERE EXTRACT(YEAR FROM ngay)=? AND EXTRACT(MONTH FROM ngay)=?
-                GROUP BY id_san_pham
-            ) n ON s.id=n.id_san_pham
+              SELECT id_san_pham, SUM(so_luong) AS total
+              FROM NhapHang
+              WHERE EXTRACT(YEAR FROM ngay) = ? AND EXTRACT(MONTH FROM ngay) = ?
+              GROUP BY id_san_pham
+            ) n ON s.id = n.id_san_pham
             ORDER BY s.stt
         `;
         db.query(sql, [firstDay, lastDay, year, month], (err, results) => {
@@ -604,4 +611,5 @@ async function getAllProducts() {
     // This is just a placeholder
     return [];
 }
+
 
