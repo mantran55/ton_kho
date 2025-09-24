@@ -1,44 +1,24 @@
 const express = require('express');
-const mysql = require('mysql2');
+const db = require('./db-pg');       // PG wrapper cho Neon
+const port = process.env.PORT || 3000;
+
 const cors = require('cors');
 const bodyParser = require('body-parser');
-
 const app = express();
-const port = 3008;
 
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
-// Cấu hình kết nối MySQL
-const db = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: '2003',
-    database: 'ton_kho'
-});
+console.log('DB ready (Neon via pg).');
 
-// Kết nối đến database
-db.connect(err => {
-    if (err) {
-        console.error('Lỗi kết nối database:', err);
-        return;
-    }
-    console.log('Đã kết nối đến database MySQL');
-});
-
-// API Routes
+// ---------------- API ROUTES ---------------- //
 
 // Lấy danh sách sản phẩm
 app.get('/api/products', (req, res) => {
     const sql = 'SELECT * FROM SanPham ORDER BY stt';
     db.query(sql, (err, results) => {
-        if (err) {
-            console.error('Lỗi truy vấn:', err);
-            return res.status(500).json({ error: 'Lỗi server' });
-        }
-        
-        // Chuyển đổi dữ liệu thành định dạng mảng
+        if (err) return res.status(500).json({ error: err.message });
         const products = results.map(product => [
             product.id,
             product.ncc,
@@ -48,7 +28,6 @@ app.get('/api/products', (req, res) => {
             product.gia,
             product.mau_ncc
         ]);
-        
         res.json(products);
     });
 });
@@ -56,24 +35,13 @@ app.get('/api/products', (req, res) => {
 // Thêm sản phẩm mới
 app.post('/api/products', (req, res) => {
     const { ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc } = req.body;
-    
-    // Lấy STT lớn nhất + 1
     const getMaxSttSql = 'SELECT MAX(stt) as maxStt FROM SanPham';
     db.query(getMaxSttSql, (err, results) => {
-        if (err) {
-            console.error('Lỗi lấy STT lớn nhất:', err);
-            return res.status(500).json({ error: 'Lỗi server' });
-        }
-        
-        const newStt = results[0].maxStt ? results[0].maxStt + 1 : 1;
-        
+        if (err) return res.status(500).json({ error: err.message });
+        const newStt = results[0].maxstt ? results[0].maxstt + 1 : 1;
         const sql = 'INSERT INTO SanPham (stt, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc) VALUES (?, ?, ?, ?, ?, ?, ?)';
         db.query(sql, [newStt, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc], (err, result) => {
-            if (err) {
-                console.error('Lỗi truy vấn:', err);
-                return res.status(500).json({ error: err.message });
-            }
-            
+            if (err) return res.status(500).json({ error: err.message });
             res.json({ success: true, id: result.insertId });
         });
     });
@@ -83,18 +51,10 @@ app.post('/api/products', (req, res) => {
 app.put('/api/products/:id', (req, res) => {
     const id = req.params.id;
     const { ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc } = req.body;
-    
-    const sql = 'UPDATE SanPham SET ncc = ?, ten_hang = ?, dvt = ?, ton_toi_thieu = ?, gia = ?, mau_ncc = ? WHERE id = ?';
+    const sql = 'UPDATE SanPham SET ncc=?, ten_hang=?, dvt=?, ton_toi_thieu=?, gia=?, mau_ncc=? WHERE id=?';
     db.query(sql, [ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc, id], (err, result) => {
-        if (err) {
-            console.error('Lỗi truy vấn:', err);
-            return res.status(500).json({ error: err.message });
-        }
-        
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
-        }
-        
+        if (err) return res.status(500).json({ error: err.message });
+        if (result.affectedRows === 0) return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
         res.json({ success: true });
     });
 });
@@ -102,130 +62,69 @@ app.put('/api/products/:id', (req, res) => {
 // Xóa sản phẩm
 app.delete('/api/products/:id', (req, res) => {
     const id = req.params.id;
-    
     const sql = 'DELETE FROM SanPham WHERE id = ?';
     db.query(sql, [id], (err, result) => {
-        if (err) {
-            console.error('Lỗi truy vấn:', err);
-            return res.status(500).json({ error: err.message });
-        }
-        
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
-        }
-        
+        if (err) return res.status(500).json({ error: err.message });
+        if (result.affectedRows === 0) return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
         res.json({ success: true });
     });
 });
 
 // Thay đổi vị trí sản phẩm
-// Thay đổi vị trí sản phẩm
 app.post('/api/products/reorder', (req, res) => {
-    console.log('Nhận yêu cầu cập nhật vị trí sản phẩm:', req.body); // Debug log
-    
     const { products } = req.body;
-    
     if (!products || !Array.isArray(products) || products.length === 0) {
-        console.log('Dữ liệu không hợp lệ:', products);
         return res.status(400).json({ error: 'Dữ liệu không hợp lệ' });
     }
-    
-    // Cập nhật STT cho tất cả sản phẩm
-    const updatePromises = products.map(product => {
-        return new Promise((resolve, reject) => {
-            console.log(`Cập nhật sản phẩm ID ${product.id} với STT ${product.stt}`); // Debug log
-            const sql = 'UPDATE SanPham SET stt = ? WHERE id = ?';
-            db.query(sql, [product.stt, product.id], (err, result) => {
-                if (err) {
-                    console.error(`Lỗi cập nhật sản phẩm ID ${product.id}:`, err); // Debug log
-                    reject(err);
-                } else {
-                    console.log(`Đã cập nhật sản phẩm ID ${product.id} thành công, affectedRows: ${result.affectedRows}`); // Debug log
-                    resolve(result);
-                }
-            });
+    const promises = products.map(p => new Promise((resolve, reject) => {
+        const sql = 'UPDATE SanPham SET stt=? WHERE id=?';
+        db.query(sql, [p.stt, p.id], (err, result) => {
+            if (err) reject(err); else resolve(result);
         });
-    });
-    
-    Promise.all(updatePromises)
-        .then(() => {
-            console.log('Cập nhật vị trí tất cả sản phẩm thành công'); // Debug log
-            res.json({ success: true });
-        })
-        .catch(err => {
-            console.error('Lỗi cập nhật vị trí sản phẩm:', err);
-            res.status(500).json({ error: err.message });
-        });
+    }));
+    Promise.all(promises)
+        .then(() => res.json({ success: true }))
+        .catch(err => res.status(500).json({ error: err.message }));
 });
 
 // Lấy dữ liệu tồn kho
 app.get('/api/inventory', (req, res) => {
     let sql = `
-        SELECT t.id, DATE_FORMAT(t.ngay, '%d/%m/%Y') as ngay, s.ten_hang, t.so_luong 
-        FROM TonKho t 
+        SELECT t.id, to_char(t.ngay,'DD/MM/YYYY') as ngay, s.ten_hang, t.so_luong
+        FROM TonKho t
         JOIN SanPham s ON t.id_san_pham = s.id
     `;
-    
+    const params = [];
     if (req.query.date) {
-        sql += ` WHERE DATE_FORMAT(t.ngay, '%d/%m/%Y') = '${req.query.date}'`;
+        sql += " WHERE to_char(t.ngay,'DD/MM/YYYY') = ?";
+        params.push(req.query.date);
     }
-    
     sql += ' ORDER BY t.ngay, s.stt';
-    
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error('Lỗi truy vấn:', err);
-            return res.status(500).json({ error: err.message });
-        }
-        
-        // Chuyển đổi dữ liệu thành định dạng mảng
-        const inventory = results.map(item => [
-            item.id,
-            item.ngay,
-            item.ten_hang,
-            item.so_luong
-        ]);
-        
+    db.query(sql, params, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        const inventory = results.map(item => [item.id, item.ngay, item.ten_hang, item.so_luong]);
         res.json(inventory);
     });
 });
 
-// Thêm/cập nhật dữ liệu tồn kho
+// Thêm/cập nhật tồn kho
 app.post('/api/inventory', (req, res) => {
     const { ngay, id_san_pham, so_luong } = req.body;
-    
-    // Chuyển đổi định dạng ngày từ dd/mm/yyyy thành yyyy-mm-dd
     const [day, month, year] = ngay.split('/');
-    const mysqlDate = `${year}-${month}-${day}`;
-    
-    // Kiểm tra xem đã có bản ghi cho ngày và sản phẩm này chưa
-    const checkSql = 'SELECT id FROM TonKho WHERE ngay = ? AND id_san_pham = ?';
-    db.query(checkSql, [mysqlDate, id_san_pham], (err, results) => {
-        if (err) {
-            console.error('Lỗi truy vấn:', err);
-            return res.status(500).json({ error: err.message });
-        }
-        
+    const pgDate = `${year}-${month}-${day}`;
+    const checkSql = 'SELECT id FROM TonKho WHERE ngay=? AND id_san_pham=?';
+    db.query(checkSql, [pgDate, id_san_pham], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
         if (results.length > 0) {
-            // Cập nhật bản ghi hiện có
-            const updateSql = 'UPDATE TonKho SET so_luong = ? WHERE id = ?';
-            db.query(updateSql, [so_luong, results[0].id], (err, result) => {
-                if (err) {
-                    console.error('Lỗi truy vấn:', err);
-                    return res.status(500).json({ error: err.message });
-                }
-                
+            const updateSql = 'UPDATE TonKho SET so_luong=? WHERE id=?';
+            db.query(updateSql, [so_luong, results[0].id], (err) => {
+                if (err) return res.status(500).json({ error: err.message });
                 res.json({ success: true });
             });
         } else {
-            // Thêm bản ghi mới
             const insertSql = 'INSERT INTO TonKho (ngay, id_san_pham, so_luong) VALUES (?, ?, ?)';
-            db.query(insertSql, [mysqlDate, id_san_pham, so_luong], (err, result) => {
-                if (err) {
-                    console.error('Lỗi truy vấn:', err);
-                    return res.status(500).json({ error: err.message });
-                }
-                
+            db.query(insertSql, [pgDate, id_san_pham, so_luong], (err, result) => {
+                if (err) return res.status(500).json({ error: err.message });
                 res.json({ success: true, id: result.insertId });
             });
         }
@@ -235,31 +134,19 @@ app.post('/api/inventory', (req, res) => {
 // Lấy dữ liệu nhập hàng
 app.get('/api/import', (req, res) => {
     let sql = `
-        SELECT n.id, DATE_FORMAT(n.ngay, '%d/%m/%Y') as ngay, s.ten_hang, n.so_luong 
-        FROM NhapHang n 
+        SELECT n.id, to_char(n.ngay,'DD/MM/YYYY') as ngay, s.ten_hang, n.so_luong
+        FROM NhapHang n
         JOIN SanPham s ON n.id_san_pham = s.id
     `;
-    
+    const params = [];
     if (req.query.date) {
-        sql += ` WHERE DATE_FORMAT(n.ngay, '%d/%m/%Y') = '${req.query.date}'`;
+        sql += " WHERE to_char(n.ngay,'DD/MM/YYYY') = ?";
+        params.push(req.query.date);
     }
-    
     sql += ' ORDER BY n.ngay, s.stt';
-    
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error('Lỗi truy vấn:', err);
-            return res.status(500).json({ error: err.message });
-        }
-        
-        // Chuyển đổi dữ liệu thành định dạng mảng
-        const imports = results.map(item => [
-            item.id,
-            item.ngay,
-            item.ten_hang,
-            item.so_luong
-        ]);
-        
+    db.query(sql, params, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        const imports = results.map(item => [item.id, item.ngay, item.ten_hang, item.so_luong]);
         res.json(imports);
     });
 });
@@ -267,105 +154,62 @@ app.get('/api/import', (req, res) => {
 // Thêm dữ liệu nhập hàng
 app.post('/api/import', (req, res) => {
     const { ngay, id_san_pham, so_luong } = req.body;
-    
-    // Chuyển đổi định dạng ngày từ yyyy-mm-dd thành yyyy-mm-dd
-    const mysqlDate = ngay;
-    
-    // Thêm dữ liệu nhập hàng
     const sql = 'INSERT INTO NhapHang (ngay, id_san_pham, so_luong) VALUES (?, ?, ?)';
-    db.query(sql, [mysqlDate, id_san_pham, so_luong], (err, result) => {
-        if (err) {
-            console.error('Lỗi truy vấn:', err);
-            return res.status(500).json({ error: err.message });
-        }
-        
+    db.query(sql, [ngay, id_san_pham, so_luong], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
         res.json({ success: true, id: result.insertId });
     });
 });
 
-// Lấy dữ liệu báo cáo
-// Lấy dữ liệu báo cáo
+// Lấy dữ liệu báo cáo (daily/monthly) – code rút gọn cho Postgres
 app.get('/api/report', (req, res) => {
     const { type, date } = req.query;
-    
     if (type === 'daily') {
-        // Báo cáo theo ngày
-        const [year, month, day] = date.split('-');
-        const reportDate = `${year}-${month}-${day}`;
-        
-        // Tính ngày hôm qua
-        const yesterday = new Date(year, month - 1, day);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayYear = yesterday.getFullYear();
-        const yesterdayMonth = String(yesterday.getMonth() + 1).padStart(2, '0');
-        const yesterdayDay = String(yesterday.getDate()).padStart(2, '0');
-        const yesterdayDate = `${yesterdayYear}-${yesterdayMonth}-${yesterdayDay}`;
-        
+        const [y, m, d] = date.split('-');
+        const reportDate = `${y}-${m}-${d}`;
+        const yesterday = new Date(y, m - 1, d - 1);
+        const yDate = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
         const sql = `
-            SELECT 
-                s.ncc,
-                s.ten_hang as tenHang,
-                s.dvt,
-                COALESCE(t1.so_luong, 0) as tonTruoc,
-                COALESCE(t2.so_luong, 0) as tonSau,
-                COALESCE(n.so_luong, 0) as nhap,
-                (COALESCE(t1.so_luong, 0) - COALESCE(t2.so_luong, 0) + COALESCE(n.so_luong, 0)) as suDung,
-                (COALESCE(t1.so_luong, 0) - COALESCE(t2.so_luong, 0) + COALESCE(n.so_luong, 0)) * s.gia as thanhTien
+            SELECT s.ncc, s.ten_hang as tenHang, s.dvt,
+                COALESCE(t1.so_luong,0) as tonTruoc,
+                COALESCE(t2.so_luong,0) as tonSau,
+                COALESCE(n.so_luong,0) as nhap,
+                (COALESCE(t1.so_luong,0)-COALESCE(t2.so_luong,0)+COALESCE(n.so_luong,0)) as suDung,
+                (COALESCE(t1.so_luong,0)-COALESCE(t2.so_luong,0)+COALESCE(n.so_luong,0))*s.gia as thanhTien
             FROM SanPham s
-            LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = ?
-            LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = ?
-            LEFT JOIN NhapHang n ON s.id = n.id_san_pham AND n.ngay = ?
+            LEFT JOIN TonKho t1 ON s.id=t1.id_san_pham AND t1.ngay=?
+            LEFT JOIN TonKho t2 ON s.id=t2.id_san_pham AND t2.ngay=?
+            LEFT JOIN NhapHang n ON s.id=n.id_san_pham AND n.ngay=?
             ORDER BY s.stt
         `;
-        
-        db.query(sql, [yesterdayDate, reportDate, reportDate], (err, results) => {
-            if (err) {
-                console.error('Lỗi truy vấn:', err);
-                return res.status(500).json({ error: err.message });
-            }
-            
+        db.query(sql, [yDate, reportDate, reportDate], (err, results) => {
+            if (err) return res.status(500).json({ error: err.message });
             res.json(results);
         });
     } else {
-        // Báo cáo theo tháng
         const [year, month] = date.split('-');
-        
-        // Tính ngày đầu tháng và ngày cuối tháng
         const firstDay = `${year}-${month}-01`;
-        const lastDay = new Date(year, month, 0);
-        const lastDayYear = lastDay.getFullYear();
-        const lastDayMonth = String(lastDay.getMonth() + 1).padStart(2, '0');
-        const lastDayDay = String(lastDay.getDate()).padStart(2, '0');
-        const lastDayFormatted = `${lastDayYear}-${lastDayMonth}-${lastDayDay}`;
-        
+        const last = new Date(year, month, 0);
+        const lastDay = `${last.getFullYear()}-${String(last.getMonth()+1).padStart(2,'0')}-${String(last.getDate()).padStart(2,'0')}`;
         const sql = `
-            SELECT 
-                s.ncc,
-                s.ten_hang as tenHang,
-                s.dvt,
-                COALESCE(t1.so_luong, 0) as tonDauThang,
-                COALESCE(t2.so_luong, 0) as tonCuoiThang,
-                COALESCE(n.total, 0) as nhapTrongThang,
-                (COALESCE(t1.so_luong, 0) - COALESCE(t2.so_luong, 0) + COALESCE(n.total, 0)) as suDungTrongThang,
-                (COALESCE(t1.so_luong, 0) - COALESCE(t2.so_luong, 0) + COALESCE(n.total, 0)) * s.gia as thanhTien
+            SELECT s.ncc, s.ten_hang as tenHang, s.dvt,
+                COALESCE(t1.so_luong,0) as tonDauThang,
+                COALESCE(t2.so_luong,0) as tonCuoiThang,
+                COALESCE(n.total,0) as nhapTrongThang,
+                (COALESCE(t1.so_luong,0)-COALESCE(t2.so_luong,0)+COALESCE(n.total,0)) as suDungTrongThang,
+                (COALESCE(t1.so_luong,0)-COALESCE(t2.so_luong,0)+COALESCE(n.total,0))*s.gia as thanhTien
             FROM SanPham s
-            LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = ?
-            LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = ?
+            LEFT JOIN TonKho t1 ON s.id=t1.id_san_pham AND t1.ngay=?
+            LEFT JOIN TonKho t2 ON s.id=t2.id_san_pham AND t2.ngay=?
             LEFT JOIN (
-                SELECT id_san_pham, SUM(so_luong) as total 
-                FROM NhapHang 
-                WHERE YEAR(ngay) = ? AND MONTH(ngay) = ?
+                SELECT id_san_pham,SUM(so_luong) as total
+                FROM NhapHang WHERE EXTRACT(YEAR FROM ngay)=? AND EXTRACT(MONTH FROM ngay)=?
                 GROUP BY id_san_pham
-            ) n ON s.id = n.id_san_pham
+            ) n ON s.id=n.id_san_pham
             ORDER BY s.stt
         `;
-        
-        db.query(sql, [firstDay, lastDayFormatted, year, month], (err, results) => {
-            if (err) {
-                console.error('Lỗi truy vấn:', err);
-                return res.status(500).json({ error: err.message });
-            }
-            
+        db.query(sql, [firstDay, lastDay, year, month], (err, results) => {
+            if (err) return res.status(500).json({ error: err.message });
             res.json(results);
         });
     }
@@ -400,13 +244,13 @@ app.get('/api/restock', (req, res) => {
         WHERE s.ton_toi_thieu > COALESCE(t.so_luong, 0)
     `;
     
-    if (ncc) {
-        sql += ` AND s.ncc = '${ncc}'`;
-    }
+    const params = [];
+    if (ncc) { sql += ' AND s.ncc = ?'; params.push(ncc); }
+    
     
     sql += ' ORDER BY s.stt';
     
-    db.query(sql, (err, results) => {
+    db.query(sql, params, (err, results) => {
         if (err) {
             console.error('Lỗi truy vấn:', err);
             return res.status(500).json({ error: err.message });
@@ -524,7 +368,7 @@ app.post('/api/inventory/check', (req, res) => {
     
     console.log('Checking inventory for date:', ngay, 'and product:', id_san_pham); // Debug log
     
-    const sql = 'SELECT id FROM TonKho WHERE ngay = ? AND id_san_pham = ?';
+    const sql = "SELECT id FROM TonKho WHERE ngay = to_date(?, 'DD/MM/YYYY') AND id_san_pham = ?";
     db.query(sql, [ngay, id_san_pham], (err, results) => {
         if (err) {
             console.error('Lỗi kiểm tra tồn kho:', err);
@@ -572,7 +416,7 @@ app.delete('/api/delete-data', async (req, res) => {
             if (productIds.length > 0) {
                 // Xóa dữ liệu tồn kho của các sản phẩm này
                 const [deleteInventoryResult] = await db.promise().query(
-                    'DELETE FROM tonkho WHERE id_san_pham IN (?)', [productIds]
+                    'DELETE FROM tonkho WHERE id_san_pham = ANY(?)', [productIds]
                 );
                 result.deletedInventory = deleteInventoryResult.affectedRows;
                 
@@ -618,7 +462,7 @@ app.put('/api/inventory', (req, res) => {
     
     console.log('Updating inventory:', req.body); // Debug log
     
-    const sql = 'UPDATE TonKho SET so_luong = ? WHERE ngay = ? AND id_san_pham = ?';
+    const sql = "UPDATE TonKho SET so_luong = ? WHERE ngay = to_date(?, 'DD/MM/YYYY') AND id_san_pham = ?";
     db.query(sql, [so_luong, ngay, id_san_pham], (err, result) => {
         if (err) {
             console.error('Lỗi cập nhật tồn kho:', err);
@@ -642,7 +486,7 @@ app.put('/api/inventory/:id', (req, res) => {
     
     // Cập nhật bản ghi trong database
     db.query(
-        'UPDATE ton_kho SET ngay = ?, id_san_pham = ?, so_luong = ? WHERE id = ?',
+        'UPDATE TonKho  SET ngay = ?, id_san_pham = ?, so_luong = ? WHERE id = ?',
         [ngay, id_san_pham, so_luong, id],
         (error, results) => {
             if (error) {
