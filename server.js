@@ -24,22 +24,13 @@ const query = (sql, params) => {
 
 // ---------------- API ROUTES ---------------- //
 
-// Lấy danh sách sản phẩm - Tối ưu với phân trang
+// Lấy danh sách sản phẩm - Trả về mảng đơn giản
 app.get('/api/products', async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = (page - 1) * limit;
+    const sql = 'SELECT * FROM SanPham ORDER BY stt';
+    const results = await query(sql);
     
-    const productsQuery = 'SELECT * FROM SanPham ORDER BY stt LIMIT ? OFFSET ?';
-    const countQuery = 'SELECT COUNT(*) as total FROM SanPham';
-    
-    const [products, countResult] = await Promise.all([
-      query(productsQuery, [limit, offset]),
-      query(countQuery)
-    ]);
-    
-    const formattedProducts = products.map(product => [
+    const products = results.map(product => [
       product.id,
       product.ncc,
       product.ten_hang,
@@ -49,13 +40,7 @@ app.get('/api/products', async (req, res) => {
       product.mau_ncc
     ]);
     
-    res.json({
-      products: formattedProducts,
-      total: countResult[0].total,
-      page,
-      limit,
-      totalPages: Math.ceil(countResult[0].total / limit)
-    });
+    res.json(products); // Trả về mảng trực tiếp
   } catch (err) {
     console.error('Error fetching products:', err);
     res.status(500).json({ error: err.message });
@@ -379,3 +364,4 @@ app.post('/api/login', (req, res) => {
 app.listen(port, () => {
   console.log(`Server đang chạy tại http://localhost:${port}`);
 });
+
