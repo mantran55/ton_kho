@@ -1,108 +1,86 @@
 const express = require('express');
-const { Pool } = require('pg');
+const db = require('./db-pg');       // PG wrapper cho Neon - GIỮ NGUYÊN MODULE NÀY
+const port = process.env.PORT || 3000;
+
 const cors = require('cors');
 const bodyParser = require('body-parser');
-
-// Cấu hình connection pool cho PostgreSQL
-const pool = new Pool({
-  user: process.env.DB_USER || 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'inventory_db',
-  password: process.env.DB_PASSWORD || 'password',
-  port: process.env.DB_PORT || 5432,
-  max: 20, // Số kết nối tối đa trong pool
-  idleTimeoutMillis: 30000, // Đóng kết nối nhàn rỗi sau 30 giây
-  connectionTimeoutMillis: 2000, // Trả lỗi sau 2 giây nếu không kết nối được
-});
-
 const app = express();
-const port = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
-// Helper function để thực hiện truy vấn
-const query = async (text, params) => {
-  const start = Date.now();
-  try {
-    const result = await pool.query(text, params);
-    const duration = Date.now() - start;
-    console.log('Query executed', { text, duration, rows: result.rowCount });
-    return result;
-  } catch (error) {
-    console.error('Query error', { text, error });
-    throw error;
-  }
-};
+console.log('DB ready (Neon via pg).');
 
-// Helper function để lấy sản phẩm với phân trang
-const getProductsPaginated = async (page = 1, limit = 10) => {
-  const offset = (page - 1) * limit;
-  const productsQuery = `
-    SELECT * FROM SanPham 
-    ORDER BY stt 
-    LIMIT $1 OFFSET $2
-  `;
-  const countQuery = 'SELECT COUNT(*) FROM SanPham';
-  
-  const [productsResult, countResult] = await Promise.all([
-    query(productsQuery, [limit, offset]),
-    query(countQuery)
-  ]);
-  
-  return {
-    products: productsResult.rows,
-    total: parseInt(countResult.rows[0].count),
-    page,
-    limit,
-    totalPages: Math.ceil(countResult.rows[0].count / limit)
-  };
+// Helper function để thực hiện truy vấn với Promise
+const query = (sql, params) => {
+  return new Promise((resolve, reject) => {
+    db.query(sql, params, (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
 };
 
 // ---------------- API ROUTES ---------------- //
 
-// Lấy danh sách sản phẩm với phân trang
+// Lấy danh sách sản phẩm - Tối ưu với phân trang
 app.get('/api/products', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
     
-    const data = await getProductsPaginated(page, limit);
-    res.json(data);
+    const productsQuery = 'SELECT * FROM SanPham ORDER BY stt LIMIT ? OFFSET ?';
+    const countQuery = 'SELECT COUNT(*) as total FROM SanPham';
+    
+    const [products, countResult] = await Promise.all([
+      query(productsQuery, [limit, offset]),
+      query(countQuery)
+    ]);
+    
+    const formattedProducts = products.map(product => [
+      product.id,
+      product.ncc,
+      product.ten_hang,
+      product.dvt,
+      product.ton_toi_thieu,
+      product.gia,
+      product.mau_ncc
+    ]);
+    
+    res.json({
+      products: formattedProducts,
+      total: countResult[0].total,
+      page,
+      limit,
+      totalPages: Math.ceil(countResult[0].total / limit)
+    });
   } catch (err) {
     console.error('Error fetching products:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Thêm sản phẩm mới
+// Thêm sản phẩm mới - Tối ưu
 app.post('/api/products', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc } = req.body;
     
-    await client.query('BEGIN');
-    
     // Lấy stt lớn nhất
-    const sttResult = await client.query('SELECT MAX(stt) as maxStt FROM SanPham');
-    const newStt = sttResult.rows[0].maxstt ? sttResult.rows[0].maxstt + 1 : 1;
+    const sttResult = await query('SELECT MAX(stt) as maxStt FROM SanPham');
+    const newStt = sttResult[0].maxstt ? sttResult[0].maxstt + 1 : 1;
     
     // Thêm sản phẩm mới
-    const result = await client.query(
-      'INSERT INTO SanPham (stt, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+    const result = await query(
+      'INSERT INTO SanPham (stt, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [newStt, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc]
     );
     
-    await client.query('COMMIT');
-    
-    res.json({ success: true, id: result.rows[0].id });
+    res.json({ success: true, id: result.insertId });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('Error adding product:', err);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
@@ -113,11 +91,11 @@ app.put('/api/products/:id', async (req, res) => {
     const { ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc } = req.body;
     
     const result = await query(
-      'UPDATE SanPham SET ncc=$1, ten_hang=$2, dvt=$3, ton_toi_thieu=$4, gia=$5, mau_ncc=$6 WHERE id=$7 RETURNING *',
+      'UPDATE SanPham SET ncc=?, ten_hang=?, dvt=?, ton_toi_thieu=?, gia=?, mau_ncc=? WHERE id=?',
       [ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc, id]
     );
     
-    if (result.rows.length === 0) {
+    if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
     }
     
@@ -133,9 +111,9 @@ app.delete('/api/products/:id', async (req, res) => {
   try {
     const id = req.params.id;
     
-    const result = await query('DELETE FROM SanPham WHERE id=$1 RETURNING *', [id]);
+    const result = await query('DELETE FROM SanPham WHERE id = ?', [id]);
     
-    if (result.rows.length === 0) {
+    if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
     }
     
@@ -146,42 +124,29 @@ app.delete('/api/products/:id', async (req, res) => {
   }
 });
 
-// Thay đổi vị trí sản phẩm - Tối ưu với batch update
+// Thay đổi vị trí sản phẩm - Tối ưu
 app.post('/api/products/reorder', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { products } = req.body;
     if (!products || !Array.isArray(products) || products.length === 0) {
       return res.status(400).json({ error: 'Dữ liệu không hợp lệ' });
     }
     
-    await client.query('BEGIN');
-    
-    // Tạo câu lệnh batch update
-    const updateQueries = products.map(p => {
-      return client.query('UPDATE SanPham SET stt=$1 WHERE id=$2', [p.stt, p.id]);
+    const promises = products.map(p => {
+      return query('UPDATE SanPham SET stt=? WHERE id=?', [p.stt, p.id]);
     });
     
-    await Promise.all(updateQueries);
-    await client.query('COMMIT');
-    
+    await Promise.all(promises);
     res.json({ success: true });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('Error reordering products:', err);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
-// Lấy dữ liệu tồn kho với phân trang
+// Lấy dữ liệu tồn kho - Tối ưu
 app.get('/api/inventory', async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = (page - 1) * limit;
-    
     let sql = `
       SELECT t.id, to_char(t.ngay,'DD/MM/YYYY') as ngay, s.ten_hang, t.so_luong
       FROM TonKho t
@@ -190,21 +155,16 @@ app.get('/api/inventory', async (req, res) => {
     const params = [];
     
     if (req.query.date) {
-      sql += " WHERE to_char(t.ngay,'DD/MM/YYYY') = $1";
+      sql += " WHERE to_char(t.ngay,'DD/MM/YYYY') = ?";
       params.push(req.query.date);
     }
     
-    sql += ' ORDER BY t.ngay, s.stt LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
-    params.push(limit, offset);
+    sql += ' ORDER BY t.ngay, s.stt';
     
-    const result = await query(sql, params);
+    const results = await query(sql, params);
+    const inventory = results.map(item => [item.id, item.ngay, item.ten_hang, item.so_luong]);
     
-    res.json({
-      data: result.rows,
-      page,
-      limit,
-      total: result.rows.length
-    });
+    res.json(inventory);
   } catch (err) {
     console.error('Error fetching inventory:', err);
     res.status(500).json({ error: err.message });
@@ -213,42 +173,30 @@ app.get('/api/inventory', async (req, res) => {
 
 // Thêm/cập nhật tồn kho - Tối ưu với UPSERT
 app.post('/api/inventory', async (req, res) => {
-  const client = await pool.connect();
   try {
     const { ngay, id_san_pham, so_luong } = req.body;
     const [day, month, year] = ngay.split('/');
     const pgDate = `${year}-${month}-${day}`;
     
-    await client.query('BEGIN');
-    
     // Sử dụng UPSERT thay vì kiểm tra rồi insert/update
-    const result = await client.query(`
+    const result = await query(`
       INSERT INTO TonKho (ngay, id_san_pham, so_luong) 
-      VALUES ($1, $2, $3)
+      VALUES (?, ?, ?)
       ON CONFLICT (ngay, id_san_pham) 
-      DO UPDATE SET so_luong = $3
+      DO UPDATE SET so_luong = ?
       RETURNING id
-    `, [pgDate, id_san_pham, so_luong]);
+    `, [pgDate, id_san_pham, so_luong, so_luong]);
     
-    await client.query('COMMIT');
-    
-    res.json({ success: true, id: result.rows[0].id });
+    res.json({ success: true, id: result.insertId });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('Error updating inventory:', err);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
-// Lấy dữ liệu nhập hàng
+// Lấy dữ liệu nhập hàng - Tối ưu
 app.get('/api/import', async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = (page - 1) * limit;
-    
     let sql = `
       SELECT n.id, to_char(n.ngay,'DD/MM/YYYY') as ngay, s.ten_hang, n.so_luong
       FROM NhapHang n
@@ -257,21 +205,16 @@ app.get('/api/import', async (req, res) => {
     const params = [];
     
     if (req.query.date) {
-      sql += " WHERE to_char(n.ngay,'DD/MM/YYYY') = $1";
+      sql += " WHERE to_char(n.ngay,'DD/MM/YYYY') = ?";
       params.push(req.query.date);
     }
     
-    sql += ' ORDER BY n.ngay, s.stt LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
-    params.push(limit, offset);
+    sql += ' ORDER BY n.ngay, s.stt';
     
-    const result = await query(sql, params);
+    const results = await query(sql, params);
+    const imports = results.map(item => [item.id, item.ngay, item.ten_hang, item.so_luong]);
     
-    res.json({
-      data: result.rows,
-      page,
-      limit,
-      total: result.rows.length
-    });
+    res.json(imports);
   } catch (err) {
     console.error('Error fetching imports:', err);
     res.status(500).json({ error: err.message });
@@ -284,11 +227,11 @@ app.post('/api/import', async (req, res) => {
     const { ngay, id_san_pham, so_luong } = req.body;
     
     const result = await query(
-      'INSERT INTO NhapHang (ngay, id_san_pham, so_luong) VALUES ($1, $2, $3) RETURNING id',
+      'INSERT INTO NhapHang (ngay, id_san_pham, so_luong) VALUES (?, ?, ?)',
       [ngay, id_san_pham, so_luong]
     );
     
-    res.json({ success: true, id: result.rows[0].id });
+    res.json({ success: true, id: result.insertId });
   } catch (err) {
     console.error('Error adding import:', err);
     res.status(500).json({ error: err.message });
@@ -306,7 +249,7 @@ app.get('/api/report', async (req, res) => {
       const yesterday = new Date(y, m - 1, d - 1);
       const yDate = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
       
-      const result = await query(`
+      const results = await query(`
         SELECT 
           s.ncc,
           s.ten_hang AS "tenHang",
@@ -317,20 +260,20 @@ app.get('/api/report', async (req, res) => {
           (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.so_luong,0))         AS "suDung",
           (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.so_luong,0)) * s.gia  AS "thanhTien"
         FROM SanPham s
-        LEFT JOIN TonKho   t1 ON s.id = t1.id_san_pham AND t1.ngay = $1
-        LEFT JOIN TonKho   t2 ON s.id = t2.id_san_pham AND t2.ngay = $2
-        LEFT JOIN NhapHang n  ON s.id = n.id_san_pham  AND n.ngay  = $2
+        LEFT JOIN TonKho   t1 ON s.id = t1.id_san_pham AND t1.ngay = ?
+        LEFT JOIN TonKho   t2 ON s.id = t2.id_san_pham AND t2.ngay = ?
+        LEFT JOIN NhapHang n  ON s.id = n.id_san_pham  AND n.ngay  = ?
         ORDER BY s.stt
-      `, [yDate, reportDate]);
+      `, [yDate, reportDate, reportDate]);
       
-      res.json(result.rows);
+      res.json(results);
     } else {
       const [year, month] = date.split('-');
       const firstDay = `${year}-${month}-01`;
       const last = new Date(year, month, 0);
       const lastDay = `${last.getFullYear()}-${String(last.getMonth()+1).padStart(2,'0')}-${String(last.getDate()).padStart(2,'0')}`;
       
-      const result = await query(`
+      const results = await query(`
         SELECT 
           s.ncc,
           s.ten_hang AS "tenHang",
@@ -341,18 +284,18 @@ app.get('/api/report', async (req, res) => {
           (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.total,0))         AS "suDungTrongThang",
           (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.total,0)) * s.gia AS "thanhTien"
         FROM SanPham s
-        LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = $1
-        LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = $2
+        LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = ?
+        LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = ?
         LEFT JOIN (
           SELECT id_san_pham, SUM(so_luong) AS total
           FROM NhapHang
-          WHERE EXTRACT(YEAR FROM ngay) = $3 AND EXTRACT(MONTH FROM ngay) = $4
+          WHERE EXTRACT(YEAR FROM ngay) = ? AND EXTRACT(MONTH FROM ngay) = ?
           GROUP BY id_san_pham
         ) n ON s.id = n.id_san_pham
         ORDER BY s.stt
       `, [firstDay, lastDay, year, month]);
       
-      res.json(result.rows);
+      res.json(results);
     }
   } catch (err) {
     console.error('Error generating report:', err);
@@ -391,70 +334,48 @@ app.get('/api/restock', async (req, res) => {
     
     const params = [];
     if (ncc) { 
-      sql += ' AND s.ncc = $1'; 
+      sql += ' AND s.ncc = ?'; 
       params.push(ncc); 
     }
     
     sql += ' ORDER BY s.stt';
     
-    const result = await query(sql, params);
-    
-    res.json(result.rows);
+    const results = await query(sql, params);
+    res.json(results);
   } catch (err) {
     console.error('Error fetching restock list:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// API đăng nhập
-app.post('/api/login', async (req, res) => {
-  try {
-    console.log('Login request:', req.body);
-    
-    const { ten_dang_nhap, mat_khau } = req.body;
-    
-    if (!ten_dang_nhap || !mat_khau) {
-      console.log('Missing username or password');
-      return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
+// API đăng nhập - Giữ nguyên từ code cũ
+app.post('/api/login', (req, res) => {
+  const { ten_dang_nhap, mat_khau } = req.body;
+  
+  if (!ten_dang_nhap || !mat_khau) {
+    return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
+  }
+  
+  const sql = 'SELECT * FROM NguoiDung WHERE ten_dang_nhap = ? AND mat_khau = ?';
+  db.query(sql, [ten_dang_nhap, mat_khau], (err, results) => {
+    if (err) {
+      console.error('Lỗi truy vấn:', err);
+      return res.status(500).json({ error: 'Lỗi server' });
     }
     
-    console.log('Querying for user:', ten_dang_nhap);
-    
-    const result = await query(
-      'SELECT id, ten_dang_nhap, quyen FROM NguoiDung WHERE ten_dang_nhap = $1 AND mat_khau = $2',
-      [ten_dang_nhap, mat_khau]
-    );
-    
-    console.log('Query result:', result.rows);
-    
-    if (result.rows.length === 0) {
-      console.log('User not found or incorrect password');
+    if (results.length === 0) {
       return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
     }
     
-    console.log('Login successful');
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('Login error:', err);
-    res.status(500).json({ error: 'Lỗi server: ' + err.message });
-  }
+    const user = results[0];
+    // Không trả về mật khẩu
+    const { mat_khau, ...userWithoutPassword } = user;
+    
+    res.json(userWithoutPassword);
+  });
 });
 
 // Khởi động server
 app.listen(port, () => {
   console.log(`Server đang chạy tại http://localhost:${port}`);
-});
-
-// Xử lý lỗi chung
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-// Đảm bảo đóng pool khi ứng dụng đóng
-process.on('SIGINT', () => {
-  pool.end(() => {
-    console.log('Pool has been closed');
-    process.exit(0);
-  });
 });
