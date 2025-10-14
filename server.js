@@ -409,25 +409,34 @@ app.get('/api/restock', async (req, res) => {
 // API đăng nhập
 app.post('/api/login', async (req, res) => {
   try {
+    console.log('Login request:', req.body);
+    
     const { ten_dang_nhap, mat_khau } = req.body;
     
     if (!ten_dang_nhap || !mat_khau) {
+      console.log('Missing username or password');
       return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
     }
+    
+    console.log('Querying for user:', ten_dang_nhap);
     
     const result = await query(
       'SELECT id, ten_dang_nhap, quyen FROM NguoiDung WHERE ten_dang_nhap = $1 AND mat_khau = $2',
       [ten_dang_nhap, mat_khau]
     );
     
+    console.log('Query result:', result.rows);
+    
     if (result.rows.length === 0) {
+      console.log('User not found or incorrect password');
       return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
     }
     
+    console.log('Login successful');
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('Error during login:', err);
-    res.status(500).json({ error: 'Lỗi server' });
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Lỗi server: ' + err.message });
   }
 });
 
