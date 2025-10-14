@@ -1,6 +1,5 @@
 const express = require('express');
 const { Pool } = require('pg');
-const NodeCache = require('node-cache');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 
@@ -15,9 +14,6 @@ const pool = new Pool({
   idleTimeoutMillis: 30000, // Đóng kết nối nhàn rỗi sau 30 giây
   connectionTimeoutMillis: 2000, // Trả lỗi sau 2 giây nếu không kết nối được
 });
-
-// Cấu hình cache
-const cache = new NodeCache({ stdTTL: 600, checkperiod: 120 }); // Cache trong 10 phút
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -72,16 +68,7 @@ app.get('/api/products', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     
-    const cacheKey = `products_${page}_${limit}`;
-    let cachedData = cache.get(cacheKey);
-    
-    if (cachedData) {
-      return res.json(cachedData);
-    }
-    
     const data = await getProductsPaginated(page, limit);
-    cache.set(cacheKey, data);
-    
     res.json(data);
   } catch (err) {
     console.error('Error fetching products:', err);
@@ -109,9 +96,6 @@ app.post('/api/products', async (req, res) => {
     
     await client.query('COMMIT');
     
-    // Xóa cache liên quan
-    cache.del('products_all');
-    
     res.json({ success: true, id: result.rows[0].id });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -137,9 +121,6 @@ app.put('/api/products/:id', async (req, res) => {
       return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
     }
     
-    // Xóa cache liên quan
-    cache.del('products_all');
-    
     res.json({ success: true });
   } catch (err) {
     console.error('Error updating product:', err);
@@ -157,9 +138,6 @@ app.delete('/api/products/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
     }
-    
-    // Xóa cache liên quan
-    cache.del('products_all');
     
     res.json({ success: true });
   } catch (err) {
@@ -187,9 +165,6 @@ app.post('/api/products/reorder', async (req, res) => {
     await Promise.all(updateQueries);
     await client.query('COMMIT');
     
-    // Xóa cache liên quan
-    cache.del('products_all');
-    
     res.json({ success: true });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -200,7 +175,7 @@ app.post('/api/products/reorder', async (req, res) => {
   }
 });
 
-// Lấy dữ liệu tồn kho với phân trang - Tối ưu
+// Lấy dữ liệu tồn kho với phân trang
 app.get('/api/inventory', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -224,27 +199,11 @@ app.get('/api/inventory', async (req, res) => {
     
     const result = await query(sql, params);
     
-    // Lấy tổng số bản ghi để phân trang chính xác
-    let countSql = `
-      SELECT COUNT(*) 
-      FROM TonKho t
-      JOIN SanPham s ON t.id_san_pham = s.id
-    `;
-    let countParams = [];
-    
-    if (req.query.date) {
-      countSql += " WHERE to_char(t.ngay,'DD/MM/YYYY') = $1";
-      countParams.push(req.query.date);
-    }
-    
-    const countResult = await query(countSql, countParams);
-    
     res.json({
       data: result.rows,
       page,
       limit,
-      total: parseInt(countResult.rows[0].count),
-      totalPages: Math.ceil(parseInt(countResult.rows[0].count) / limit)
+      total: result.rows.length
     });
   } catch (err) {
     console.error('Error fetching inventory:', err);
@@ -336,7 +295,7 @@ app.post('/api/import', async (req, res) => {
   }
 });
 
-// Lấy dữ liệu báo cáo (daily/monthly) - Tối ưu hơn
+// Lấy dữ liệu báo cáo (daily/monthly) - Tối ưu
 app.get('/api/report', async (req, res) => {
   try {
     const { type, date } = req.query;
@@ -347,44 +306,23 @@ app.get('/api/report', async (req, res) => {
       const yesterday = new Date(y, m - 1, d - 1);
       const yDate = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
       
-      const cacheKey = `report_daily_${date}`;
-      let cachedData = cache.get(cacheKey);
-      
-      if (cachedData) {
-        return res.json(cachedData);
-      }
-      
-      // Sử dụng CTE để tối ưu truy vấn
       const result = await query(`
-        WITH inventory_data AS (
-          SELECT 
-            s.id,
-            s.ncc,
-            s.ten_hang AS "tenHang",
-            s.dvt,
-            s.gia,
-            COALESCE(t1.so_luong, 0) AS "tonTruoc",
-            COALESCE(t2.so_luong, 0) AS "tonSau",
-            COALESCE(n.so_luong, 0) AS "nhap"
-          FROM SanPham s
-          LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = $1
-          LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = $2
-          LEFT JOIN NhapHang n ON s.id = n.id_san_pham AND n.ngay = $2
-        )
         SELECT 
-          ncc,
-          "tenHang",
-          dvt,
-          "tonTruoc",
-          "tonSau",
-          "nhap",
-          ("tonTruoc" - "tonSau" + "nhap") AS "suDung",
-          ("tonTruoc" - "tonSau" + "nhap") * gia AS "thanhTien"
-        FROM inventory_data
-        ORDER BY "tenHang"
+          s.ncc,
+          s.ten_hang AS "tenHang",
+          s.dvt,
+          COALESCE(t1.so_luong, 0) AS "tonTruoc",
+          COALESCE(t2.so_luong, 0) AS "tonSau",
+          COALESCE(n.so_luong, 0)  AS "nhap",
+          (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.so_luong,0))         AS "suDung",
+          (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.so_luong,0)) * s.gia  AS "thanhTien"
+        FROM SanPham s
+        LEFT JOIN TonKho   t1 ON s.id = t1.id_san_pham AND t1.ngay = $1
+        LEFT JOIN TonKho   t2 ON s.id = t2.id_san_pham AND t2.ngay = $2
+        LEFT JOIN NhapHang n  ON s.id = n.id_san_pham  AND n.ngay  = $2
+        ORDER BY s.stt
       `, [yDate, reportDate]);
       
-      cache.set(cacheKey, result.rows);
       res.json(result.rows);
     } else {
       const [year, month] = date.split('-');
@@ -392,52 +330,28 @@ app.get('/api/report', async (req, res) => {
       const last = new Date(year, month, 0);
       const lastDay = `${last.getFullYear()}-${String(last.getMonth()+1).padStart(2,'0')}-${String(last.getDate()).padStart(2,'0')}`;
       
-      const cacheKey = `report_monthly_${date}`;
-      let cachedData = cache.get(cacheKey);
-      
-      if (cachedData) {
-        return res.json(cachedData);
-      }
-      
-      // Sử dụng CTE để tối ưu truy vấn
       const result = await query(`
-        WITH monthly_imports AS (
-          SELECT 
-            id_san_pham, 
-            SUM(so_luong) AS total
+        SELECT 
+          s.ncc,
+          s.ten_hang AS "tenHang",
+          s.dvt,
+          COALESCE(t1.so_luong, 0) AS "tonDauThang",
+          COALESCE(t2.so_luong, 0) AS "tonCuoiThang",
+          COALESCE(n.total, 0)     AS "nhapTrongThang",
+          (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.total,0))         AS "suDungTrongThang",
+          (COALESCE(t1.so_luong,0) - COALESCE(t2.so_luong,0) + COALESCE(n.total,0)) * s.gia AS "thanhTien"
+        FROM SanPham s
+        LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = $1
+        LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = $2
+        LEFT JOIN (
+          SELECT id_san_pham, SUM(so_luong) AS total
           FROM NhapHang
           WHERE EXTRACT(YEAR FROM ngay) = $3 AND EXTRACT(MONTH FROM ngay) = $4
           GROUP BY id_san_pham
-        ),
-        inventory_data AS (
-          SELECT 
-            s.id,
-            s.ncc,
-            s.ten_hang AS "tenHang",
-            s.dvt,
-            s.gia,
-            COALESCE(t1.so_luong, 0) AS "tonDauThang",
-            COALESCE(t2.so_luong, 0) AS "tonCuoiThang",
-            COALESCE(mi.total, 0) AS "nhapTrongThang"
-          FROM SanPham s
-          LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = $1
-          LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = $2
-          LEFT JOIN monthly_imports mi ON s.id = mi.id_san_pham
-        )
-        SELECT 
-          ncc,
-          "tenHang",
-          dvt,
-          "tonDauThang",
-          "tonCuoiThang",
-          "nhapTrongThang",
-          ("tonDauThang" - "tonCuoiThang" + "nhapTrongThang") AS "suDungTrongThang",
-          ("tonDauThang" - "tonCuoiThang" + "nhapTrongThang") * gia AS "thanhTien"
-        FROM inventory_data
-        ORDER BY "tenHang"
+        ) n ON s.id = n.id_san_pham
+        ORDER BY s.stt
       `, [firstDay, lastDay, year, month]);
       
-      cache.set(cacheKey, result.rows);
       res.json(result.rows);
     }
   } catch (err) {
@@ -446,19 +360,11 @@ app.get('/api/report', async (req, res) => {
   }
 });
 
-// Lấy danh sách lên hàng - Tối ưu hơn
+// Lấy danh sách lên hàng - Tối ưu với window function
 app.get('/api/restock', async (req, res) => {
   try {
     const { ncc } = req.query;
     
-    const cacheKey = `restock_${ncc || 'all'}`;
-    let cachedData = cache.get(cacheKey);
-    
-    if (cachedData) {
-      return res.json(cachedData);
-    }
-    
-    // Sử dụng CTE để tối ưu truy vấn
     let sql = `
       WITH latest_inventory AS (
         SELECT 
@@ -466,9 +372,8 @@ app.get('/api/restock', async (req, res) => {
           so_luong,
           ROW_NUMBER() OVER (PARTITION BY id_san_pham ORDER BY ngay DESC) as rn
         FROM TonKho
-      ),
-      restock_calculation AS (
-        SELECT 
+      )
+      SELECT 
           s.id,
           s.stt,
           s.ncc,
@@ -479,24 +384,21 @@ app.get('/api/restock', async (req, res) => {
           s.gia,
           GREATEST(s.ton_toi_thieu - COALESCE(li.so_luong, 0), 0) as canDat,
           GREATEST(s.ton_toi_thieu - COALESCE(li.so_luong, 0), 0) * s.gia as thanhTien
-        FROM SanPham s
-        LEFT JOIN latest_inventory li ON s.id = li.id_san_pham AND li.rn = 1
-        WHERE s.ton_toi_thieu > COALESCE(li.so_luong, 0)
-      )
-      SELECT * FROM restock_calculation
+      FROM SanPham s
+      LEFT JOIN latest_inventory li ON s.id = li.id_san_pham AND li.rn = 1
+      WHERE s.ton_toi_thieu > COALESCE(li.so_luong, 0)
     `;
     
     const params = [];
     if (ncc) { 
-      sql += ' WHERE ncc = $1'; 
+      sql += ' AND s.ncc = $1'; 
       params.push(ncc); 
     }
     
-    sql += ' ORDER BY stt';
+    sql += ' ORDER BY s.stt';
     
     const result = await query(sql, params);
     
-    cache.set(cacheKey, result.rows);
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching restock list:', err);
@@ -547,4 +449,3 @@ process.on('SIGINT', () => {
     process.exit(0);
   });
 });
-
