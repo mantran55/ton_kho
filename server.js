@@ -206,6 +206,24 @@ app.post('/api/import', async (req, res) => {
     }
 });
 
+// Xóa nhập hàng
+app.delete('/api/import/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sql = 'DELETE FROM NhapHang WHERE id = $1';
+        const [result] = await db.promise().query(sql, [id]);
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Không tìm thấy bản ghi nhập hàng' });
+        }
+        
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error deleting import:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Lấy dữ liệu báo cáo (daily/monthly)
 app.get('/api/report', async (req, res) => {
     try {
@@ -667,3 +685,4 @@ function formatDate(date) {
 app.listen(port, () => {
     console.log(`Server đang chạy tại http://localhost:${port}`);
 });
+
