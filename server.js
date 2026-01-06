@@ -57,6 +57,66 @@ app.post('/api/products', async (req, res) => {
     }
 });
 
+// Lấy dữ liệu báo cáo đá theo tháng
+app.get('/api/da-report', async (req, res) => {
+    try {
+        const { year, month } = req.query;
+        
+        if (!year || !month) {
+            return res.status(400).json({ error: 'Thiếu tham số year hoặc month' });
+        }
+        
+        // Lấy ngày đầu tiên của tháng
+        const firstDay = new Date(parseInt(year), parseInt(month) - 1, 1);
+        
+        // Lấy ngày cuối cùng của tháng
+        const lastDay = new Date(parseInt(year), parseInt(month), 0);
+        
+        // Tạo mảng các ngày trong tháng
+        const daysInMonth = [];
+        for (let day = 1; day <= lastDay.getDate(); day++) {
+            daysInMonth.push(new Date(parseInt(year), parseInt(month) - 1, day));
+        }
+        
+        // Lấy dữ liệu tồn kho cho sản phẩm đá (ID 166) trong tháng
+        const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+        const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+        
+        const sql = `
+            SELECT 
+                EXTRACT(DAY FROM t.ngay) as day,
+                t.so_luong
+            FROM TonKho t
+            WHERE t.id_san_pham = 166 
+            AND t.ngay BETWEEN $1 AND $2
+            ORDER BY t.ngay
+        `;
+        
+        const [results] = await db.promise().query(sql, [startDate, endDate]);
+        
+        // Tạo object map ngày -> số lượng
+        const dayToQuantity = {};
+        results.forEach(item => {
+            dayToQuantity[item.day] = item.so_luong;
+        });
+        
+        // Tạo mảng kết quả cho tất cả các ngày trong tháng
+        const reportData = [];
+        daysInMonth.forEach(day => {
+            const dayOfMonth = day.getDate();
+            reportData.push({
+                day: dayOfMonth,
+                quantity: dayToQuantity[dayOfMonth] || 0
+            });
+        });
+        
+        res.json(reportData);
+    } catch (err) {
+        console.error('Error fetching da report:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Cập nhật sản phẩm
 app.put('/api/products/:id', async (req, res) => {
     try {
@@ -685,4 +745,5 @@ function formatDate(date) {
 app.listen(port, () => {
     console.log(`Server đang chạy tại http://localhost:${port}`);
 });
+
 
