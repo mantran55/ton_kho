@@ -92,13 +92,20 @@ app.post('/api/inventory', async (req, res) => {
   try {
     const { ngay, id_san_pham, so_luong } = req.body;
 
+    // --- BỔ SUNT ĐOẠN NÀY ---
+    // Chuyển đổi định dạng ngày từ DD/MM/YYYY thành YYYY-MM-DD cho PostgreSQL
+    const [day, month, year] = ngay.split('/');
+    const pgDate = `${year}-${month}-${day}`;
+    // --- KẾT THÚC BỔ SUNT ---
+
     const sql = `
       INSERT INTO TonKho (ngay, id_san_pham, so_luong)
       VALUES ($1,$2,$3)
       ON CONFLICT (ngay,id_san_pham)
       DO UPDATE SET so_luong = EXCLUDED.so_luong
     `;
-    await db.query(sql, [ngay, id_san_pham, so_luong]);
+    // Sử dụng biến pgDate đã được chuyển đổi
+    await db.query(sql, [pgDate, id_san_pham, so_luong]);
 
     res.json({ success: true });
   } catch (err) {
@@ -174,3 +181,4 @@ app.post('/api/login', async (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Server running on port ${port}`);
 });
+
