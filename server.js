@@ -1,184 +1,127 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const db = require('./db-pg'); // pg Pool (Neon)
+const db = require('./db-pg'); // Sử dụng db-pg mới
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
 console.log('🚀 Server started - Neon Postgres ready');
 
-// ================== PRODUCTS ==================
+// --- HÀM HỖ TRỢ CHUYỂN ĐỔI NGÀY ---
+// Hàm chuyển đổi ngày từ DD/MM/YYYY thành YYYY-MM-DD
+function convertDateFormat(dateStr) {
+  if (!dateStr) return null;
+  const parts = dateStr.trim().split('/');
+  if (parts.length === 3) {
+    const [day, month, year] = parts;
+    const pgDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    return pgDate;
+  }
+  return null;
+}
+
+// ================== API ROUTES ==================
 
 // Lấy danh sách sản phẩm
 app.get('/api/products', async (req, res) => {
   try {
-    const sql = `
-      SELECT id, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc
-      FROM SanPham
-      ORDER BY stt
-    `;
-    const { rows } = await db.query(sql);
-
-    res.json(rows.map(p => ({
-      id: p.id,
-      ncc: p.ncc,
-      tenHang: p.ten_hang,
-      dvt: p.dvt,
-      tonToiThieu: p.ton_toi_thieu,
-      gia: p.gia,
-      mauNcc: p.mau_ncc
-    })));
+    const { rows } = await db.query('SELECT * FROM SanPham ORDER BY stt');
+    res.json(rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Lỗi lấy sản phẩm' });
+    console.error('Error fetching products:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Thêm sản phẩm
+// Thêm sản phẩm mới
 app.post('/api/products', async (req, res) => {
   try {
     const { ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc } = req.body;
-
-    const { rows } = await db.query(`SELECT COALESCE(MAX(stt),0)+1 AS stt FROM SanPham`);
-    const stt = rows[0].stt;
-
-    await db.query(`
-      INSERT INTO SanPham (stt,ncc,ten_hang,dvt,ton_toi_thieu,gia,mau_ncc)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
-    `, [stt, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc]);
-
-    res.json({ success: true });
+    const { rows: [maxSttResult] } = await db.query('SELECT COALESCE(MAX(stt),0)+1 AS newStt FROM SanPham');
+    const newStt = maxSttResult.newstt;
+    const { rows: [result] } = await db.query('INSERT INTO SanPham (stt, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id', [newStt, ncc, ten_hang, dvt, ton_toi_thieu, gia, mau_ncc]);
+    res.json({ success: true, id: result.id });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Lỗi thêm sản phẩm' });
+    console.error('Error adding product:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ================== INVENTORY ==================
+// ... (Bạn có thể thêm các route khác như PUT, DELETE products tương tự) ...
 
-// Lấy tồn kho theo ngày
+// Lấy dữ liệu tồn kho
 app.get('/api/inventory', async (req, res) => {
   try {
-    const { date } = req.query; // yyyy-mm-dd
-
-    let sql = `
-      SELECT t.id, t.ngay, s.ten_hang, t.so_luong
-      FROM TonKho t
-      JOIN SanPham s ON s.id = t.id_san_pham
-    `;
+    let sql = `SELECT t.id, to_char(t.ngay,'DD/MM/YYYY') as ngay, s.ten_hang, t.so_luong FROM TonKho t JOIN SanPham s ON t.id_san_pham = s.id`;
     const params = [];
-
-    if (date) {
-      sql += ` WHERE t.ngay = $1`;
-      params.push(date);
+    if (req.query.date) {
+      sql += " WHERE to_char(t.ngay,'DD/MM/YYYY') = $1";
+      params.push(req.query.date);
     }
-
-    sql += ` ORDER BY t.ngay, s.stt`;
-
+    sql += ' ORDER BY t.ngay, s.stt';
     const { rows } = await db.query(sql, params);
     res.json(rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Lỗi lấy tồn kho' });
+    console.error('Error fetching inventory:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// UPSERT tồn kho
+// Thêm/cập nhật tồn kho (SỬA LỖI NGÀY)
 app.post('/api/inventory', async (req, res) => {
   try {
     const { ngay, id_san_pham, so_luong } = req.body;
+    const pgDate = convertDateFormat(ngay); // <-- CHUYỂN ĐỔI NGÀY
+    if (!pgDate) return res.status(400).json({ error: 'Định dạng ngày không hợp lệ' });
 
-    // --- BỔ SUNT ĐOẠN NÀY ---
-    // Chuyển đổi định dạng ngày từ DD/MM/YYYY thành YYYY-MM-DD cho PostgreSQL
-    const [day, month, year] = ngay.split('/');
-    const pgDate = `${year}-${month}-${day}`;
-    // --- KẾT THÚC BỔ SUNT ---
-
-    const sql = `
-      INSERT INTO TonKho (ngay, id_san_pham, so_luong)
-      VALUES ($1,$2,$3)
-      ON CONFLICT (ngay,id_san_pham)
-      DO UPDATE SET so_luong = EXCLUDED.so_luong
-    `;
-    // Sử dụng biến pgDate đã được chuyển đổi
-    await db.query(sql, [pgDate, id_san_pham, so_luong]);
-
-    res.json({ success: true });
+    const sql = `INSERT INTO TonKho (ngay, id_san_pham, so_luong) VALUES ($1, $2, $3) ON CONFLICT (ngay, id_san_pham) DO UPDATE SET so_luong = EXCLUDED.so_luong RETURNING id`;
+    const { rows: [result] } = await db.query(sql, [pgDate, id_san_pham, so_luong]);
+    res.json({ success: true, id: result.id });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Lỗi lưu tồn kho' });
+    console.error('Error saving inventory:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ================== REPORT ==================
-
-// Báo cáo nhập hàng (TỐI ƯU – 1 QUERY)
-app.get('/api/inventory-imports', async (req, res) => {
+// Thêm dữ liệu nhập hàng (SỬA LỖI NGÀY - RẤT CÓ THỂ LÀ NGUYÊN NHÂN)
+app.post('/api/import', async (req, res) => {
   try {
-    const { date } = req.query; // yyyy-mm-dd
+    const { ngay, id_san_pham, so_luong } = req.body;
+    const pgDate = convertDateFormat(ngay); // <-- THÊM CHUYỂN ĐỔI NGÀY Ở ĐÂY
+    if (!pgDate) return res.status(400).json({ error: 'Định dạng ngày không hợp lệ' });
 
-    const current = new Date(date);
-    const prev = new Date(current);
-    prev.setDate(prev.getDate() - 1);
-
-    const sql = `
-      SELECT
-        s.ten_hang,
-        GREATEST(
-          COALESCE(t2.so_luong,0) - COALESCE(t1.so_luong,0),
-          0
-        ) AS so_luong_nhap
-      FROM SanPham s
-      LEFT JOIN TonKho t1 ON s.id = t1.id_san_pham AND t1.ngay = $1
-      LEFT JOIN TonKho t2 ON s.id = t2.id_san_pham AND t2.ngay = $2
-      WHERE COALESCE(t2.so_luong,0) > COALESCE(t1.so_luong,0)
-      ORDER BY s.stt
-    `;
-
-    const { rows } = await db.query(sql, [
-      prev.toISOString().slice(0,10),
-      current.toISOString().slice(0,10)
-    ]);
-
-    res.json(rows);
+    const { rows: [result] } = await db.query('INSERT INTO NhapHang (ngay, id_san_pham, so_luong) VALUES ($1, $2, $3) RETURNING id', [pgDate, id_san_pham, so_luong]);
+    res.json({ success: true, id: result.id });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Lỗi báo cáo nhập hàng' });
+    console.error('Error adding import:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ================== LOGIN ==================
-
+// API đăng nhập
 app.post('/api/login', async (req, res) => {
   try {
     const { ten_dang_nhap, mat_khau } = req.body;
-
-    const sql = `
-      SELECT id, ten_dang_nhap, quyen
-      FROM NguoiDung
-      WHERE ten_dang_nhap = $1 AND mat_khau = $2
-    `;
-
-    const { rows } = await db.query(sql, [ten_dang_nhap, mat_khau]);
-
-    if (rows.length === 0) {
-      return res.status(401).json({ error: 'Sai tài khoản hoặc mật khẩu' });
+    if (!ten_dang_nhap || !mat_khau) {
+      return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
     }
-
+    const { rows } = await db.query('SELECT id, ten_dang_nhap, quyen FROM NguoiDung WHERE ten_dang_nhap = $1 AND mat_khau = $2', [ten_dang_nhap, mat_khau]);
+    if (rows.length === 0) {
+      return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
+    }
     res.json(rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Lỗi đăng nhập' });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Lỗi server' });
   }
 });
 
-// ================== START ==================
-
+// Khởi động server
 app.listen(port, () => {
   console.log(`✅ Server running on port ${port}`);
 });
-
