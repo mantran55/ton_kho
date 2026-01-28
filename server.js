@@ -194,8 +194,109 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// Lấy danh sách người dùng
+app.get('/api/users', async (req, res) => {
+  try {
+    const sql = 'SELECT id, ten_dang_nhap, quyen FROM NguoiDung';
+    const { rows } = await db.query(sql);
+    
+    // Frontend của bạn có vẻ muốn dữ liệu ở dạng mảng lồng
+    const users = rows.map(user => [
+      user.id, 
+      user.ten_dang_nhap, 
+      '', // Không trả về mật khẩu
+      user.quyen
+    ]);
+    
+    res.json(users);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Lỗi khi tải danh sách người dùng' });
+  }
+});
+
+// Thêm người dùng mới
+app.post('/api/users', async (req, res) => {
+  try {
+    const { ten_dang_nhap, mat_khau, quyen } = req.body;
+    
+    const sql = 'INSERT INTO NguoiDung (ten_dang_nhap, mat_khau, quyen) VALUES ($1, $2, $3) RETURNING id';
+    const { rows: [result] } = await db.query(sql, [ten_dang_nhap, mat_khau, quyen]);
+    
+    res.json({ success: true, id: result.id });
+  } catch (err) {
+    console.error(err);
+    
+    // Kiểm tra lỗi trùng tên đăng nhập
+    if (err.code === '23505') { // PostgreSQL unique violation error code
+      return res.status(400).json({ error: 'Tên đăng nhập đã tồn tại' });
+    }
+    
+    res.status(500).json({ error: 'Lỗi thêm người dùng' });
+  }
+});
+
+// Cập nhật người dùng
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { ten_dang_nhap, mat_khau, quyen } = req.body;
+    
+    let sql, params;
+    
+    if (mat_khau) {
+      // Cập nhật cả mật khẩu
+      sql = 'UPDATE NguoiDung SET ten_dang_nhap = $1, mat_khau = $2, quyen = $3 WHERE id = $4';
+      params = [ten_dang_nhap, mat_khau, quyen, id];
+    } else {
+      // Không cập nhật mật khẩu
+      sql = 'UPDATE NguoiDung SET ten_dang_nhap = $1, quyen = $2 WHERE id = $3';
+      params = [ten_dang_nhap, quyen, id];
+    }
+    
+    // Lấy meta để kiểm tra affectedRows
+    const { meta } = await db.query(sql, params);
+    
+    if (meta.affectedRows === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy người dùng' });
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'Tên đăng nhập đã tồn tại' });
+    }
+    
+    res.status(500).json({ error: 'Lỗi cập nhật người dùng' });
+  }
+});
+
+// Xóa người dùng
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const sql = 'DELETE FROM NguoiDung WHERE id = $1';
+    
+    // Lấy meta để kiểm tra affectedRows
+    const { meta } = await db.query(sql, [id]);
+    
+    if (meta.affectedRows === 0) {
+      return res.status(404).json({ error: 'Không tìm thấy người dùng' });
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Lỗi xóa người dùng' });
+  }
+});
+
+
 // ================== START ==================
 
 app.listen(port, () => {
   console.log(`✅ Server running on port ${port}`);
 });
+
