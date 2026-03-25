@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const db = require('./db-pg'); // PG wrapper cho Neon
 const port = process.env.PORT || 3000;
 
@@ -446,13 +447,13 @@ app.put('/api/users/:id', async (req, res) => {
         
         let sql, params;
         
-        if (mat_khau) {
-            // Cập nhật cả mật khẩu
-            sql = 'UPDATE NguoiDung SET ten_dang_nhap = $1, mat_khau = $2, quyen = $3 WHERE id = $4';
+        if (mat_khau && mat_khau.trim() !== '') {
+            // Nếu có nhập mật khẩu mới -> Cập nhật mật khẩu VÀ XÓA TOKEN (để buộc đăng nhập lại)
+            sql = 'UPDATE "NguoiDung" SET ten_dang_nhap = $1, mat_khau = $2, quyen = $3, token = NULL WHERE id = $4';
             params = [ten_dang_nhap, mat_khau, quyen, id];
         } else {
-            // Không cập nhật mật khẩu
-            sql = 'UPDATE NguoiDung SET ten_dang_nhap = $1, quyen = $2 WHERE id = $3';
+            // Không đổi mật khẩu
+            sql = 'UPDATE "NguoiDung" SET ten_dang_nhap = $1, quyen = $2 WHERE id = $3';
             params = [ten_dang_nhap, quyen, id];
         }
         
@@ -465,12 +466,6 @@ app.put('/api/users/:id', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('Error updating user:', err);
-        
-        // Kiểm tra lỗi trùng tên đăng nhập
-        if (err.code === '23505') { // PostgreSQL unique violation error code
-            return res.status(400).json({ error: 'Tên đăng nhập đã tồn tại' });
-        }
-        
         res.status(500).json({ error: err.message });
     }
 });
@@ -622,30 +617,63 @@ app.put('/api/inventory/:id', async (req, res) => {
 // API đăng nhập (Tối ưu)
 app.post('/api/login', async (req, res) => {
     try {
-        console.time('login');
         const { ten_dang_nhap, mat_khau } = req.body;
         
+        // Kiểm tra đầu vào
         if (!ten_dang_nhap || !mat_khau) {
             return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
         }
         
-        // Chỉ chọn các cột cần thiết, không lấy mật khẩu
-        const sql = 'SELECT id, ten_dang_nhap, quyen FROM NguoiDung WHERE ten_dang_nhap = $1 AND mat_khau = $2';
+        // Tìm user (sử dụng tên bảng thường nếu PostgreSQL tự chuyển lowercase)
+        const sql = 'SELECT id, ten_dang_nhap, mat_khau, quyen FROM "NguoiDung" WHERE ten_dang_nhap = $1';
+        const [result] = await db.promise().query(sql, [ten_dang_nhap]);
         
-        console.time('query');
-        const [result] = await db.promise().query(sql, [ten_dang_nhap, mat_khau]);
-        console.timeEnd('query');
-        
-        if (result.length === 0) {
+        if (result.length === 0 || result[0].mat_khau !== mat_khau) {
             return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
         }
         
         const user = result[0];
-        console.timeEnd('login');
-        res.json(user);
+        
+        // --- PHẦN THÊM MỚI: TẠO TOKEN ---
+        const token = crypto.randomBytes(32).toString('hex'); // Tạo chuỗi ngẫu nhiên 64 ký tự
+        
+        // Lưu token vào database cho user này
+        const updateTokenSql = 'UPDATE "NguoiDung" SET token = $1 WHERE id = $2';
+        await db.promise().query(updateTokenSql, [token, user.id]);
+        
+        // Trả về thông tin user kèm token
+        res.json({
+            id: user.id,
+            ten_dang_nhap: user.ten_dang_nhap,
+            quyen: user.quyen,
+            token: token
+        });
+        
     } catch (error) {
         console.error('Login error:', error);
         res.status(500).json({ error: 'Lỗi server' });
+    }
+});
+
+app.post('/api/verify-token', async (req, res) => {
+    try {
+        const { id, token } = req.body;
+        
+        if (!id || !token) {
+            return res.status(401).json({ valid: false });
+        }
+
+        // Kiểm tra xem id và token có khớp trong DB không
+        const sql = 'SELECT id FROM "NguoiDung" WHERE id = $1 AND token = $2';
+        const [result] = await db.promise().query(sql, [id, token]);
+        
+        if (result.length > 0) {
+            res.json({ valid: true });
+        } else {
+            res.status(401).json({ valid: false });
+        }
+    } catch (error) {
+        res.status(500).json({ valid: false });
     }
 });
 
