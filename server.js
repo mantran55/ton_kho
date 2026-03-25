@@ -401,7 +401,7 @@ app.get('/api/restock', async (req, res) => {
 // Lấy danh sách người dùng
 app.get('/api/users', async (req, res) => {
     try {
-        const sql = 'SELECT id, ten_dang_nhap, quyen FROM NguoiDung';
+        const sql = 'SELECT id, ten_dang_nhap, quyen FROM nguoidung';
         const [results] = await db.promise().query(sql);
         
         const users = results.map(user => [
@@ -423,7 +423,7 @@ app.post('/api/users', async (req, res) => {
     try {
         const { ten_dang_nhap, mat_khau, quyen } = req.body;
         
-        const sql = 'INSERT INTO NguoiDung (ten_dang_nhap, mat_khau, quyen) VALUES ($1, $2, $3)';
+        const sql = 'INSERT INTO nguoidung (ten_dang_nhap, mat_khau, quyen) VALUES ($1, $2, $3)';
         const [result] = await db.promise().query(sql, [ten_dang_nhap, mat_khau, quyen]);
         
         res.json({ success: true, id: result.insertId });
@@ -449,11 +449,11 @@ app.put('/api/users/:id', async (req, res) => {
         
         if (mat_khau && mat_khau.trim() !== '') {
             // Nếu có nhập mật khẩu mới -> Cập nhật mật khẩu VÀ XÓA TOKEN (để buộc đăng nhập lại)
-            sql = 'UPDATE "NguoiDung" SET ten_dang_nhap = $1, mat_khau = $2, quyen = $3, token = NULL WHERE id = $4';
+            sql = 'UPDATE "nguoidung" SET ten_dang_nhap = $1, mat_khau = $2, quyen = $3, token = NULL WHERE id = $4';
             params = [ten_dang_nhap, mat_khau, quyen, id];
         } else {
             // Không đổi mật khẩu
-            sql = 'UPDATE "NguoiDung" SET ten_dang_nhap = $1, quyen = $2 WHERE id = $3';
+            sql = 'UPDATE "nguoidung" SET ten_dang_nhap = $1, quyen = $2 WHERE id = $3';
             params = [ten_dang_nhap, quyen, id];
         }
         
@@ -474,7 +474,7 @@ app.put('/api/users/:id', async (req, res) => {
 app.delete('/api/users/:id', async (req, res) => {
     try {
         const id = req.params.id;
-        const sql = 'DELETE FROM NguoiDung WHERE id = $1';
+        const sql = 'DELETE FROM nguoidung WHERE id = $1';
         const [result] = await db.promise().query(sql, [id]);
         
         if (result.affectedRows === 0) {
@@ -625,7 +625,7 @@ app.post('/api/login', async (req, res) => {
         }
         
         // Tìm user (sử dụng tên bảng thường nếu PostgreSQL tự chuyển lowercase)
-        const sql = 'SELECT id, ten_dang_nhap, mat_khau, quyen FROM "NguoiDung" WHERE ten_dang_nhap = $1';
+        const sql = 'SELECT id, ten_dang_nhap, mat_khau, quyen FROM "nguoidung" WHERE ten_dang_nhap = $1';
         const [result] = await db.promise().query(sql, [ten_dang_nhap]);
         
         if (result.length === 0 || result[0].mat_khau !== mat_khau) {
@@ -638,7 +638,7 @@ app.post('/api/login', async (req, res) => {
         const token = crypto.randomBytes(32).toString('hex'); // Tạo chuỗi ngẫu nhiên 64 ký tự
         
         // Lưu token vào database cho user này
-        const updateTokenSql = 'UPDATE "NguoiDung" SET token = $1 WHERE id = $2';
+        const updateTokenSql = 'UPDATE "nguoidung" SET token = $1 WHERE id = $2';
         await db.promise().query(updateTokenSql, [token, user.id]);
         
         // Trả về thông tin user kèm token
@@ -664,7 +664,7 @@ app.post('/api/verify-token', async (req, res) => {
         }
 
         // Kiểm tra xem id và token có khớp trong DB không
-        const sql = 'SELECT id FROM "NguoiDung" WHERE id = $1 AND token = $2';
+        const sql = 'SELECT id FROM "nguoidung" WHERE id = $1 AND token = $2';
         const [result] = await db.promise().query(sql, [id, token]);
         
         if (result.length > 0) {
